@@ -2632,10 +2632,10 @@ fn parseObjectsIntoAtoms(self: *MachO) !void {
     const tracy = trace(@src());
     defer tracy.end();
 
-    var parsed_atoms = Object.ParsedAtoms.init(self.base.allocator);
+    var parsed_atoms = std.AutoArrayHashMap(MatchingSection, *Atom).init(self.base.allocator);
     defer parsed_atoms.deinit();
 
-    var first_atoms = Object.ParsedAtoms.init(self.base.allocator);
+    var first_atoms = std.AutoArrayHashMap(MatchingSection, *Atom).init(self.base.allocator);
     defer first_atoms.deinit();
 
     var section_metadata = std.AutoHashMap(MatchingSection, struct {
@@ -2644,13 +2644,12 @@ fn parseObjectsIntoAtoms(self: *MachO) !void {
     }).init(self.base.allocator);
     defer section_metadata.deinit();
 
-    for (self.objects.items) |*object, object_id| {
+    for (self.objects.items) |*object| {
         if (object.analyzed) continue;
 
-        var atoms_in_objects = try object.parseIntoAtoms(self.base.allocator, @intCast(u16, object_id), self);
-        defer atoms_in_objects.deinit();
+        try object.parseIntoAtoms(self.base.allocator, self);
 
-        var it = atoms_in_objects.iterator();
+        var it = object.atoms.iterator();
         while (it.next()) |entry| {
             const match = entry.key_ptr.*;
             const last_atom = entry.value_ptr.*;
@@ -4655,7 +4654,7 @@ fn writeSymbolTable(self: *MachO) !void {
                 .n_value = object.mtime orelse 0,
             });
 
-            for (object.atoms.items) |atom| {
+            for (object.managed_atoms.items) |atom| {
                 if (atom.stab) |stab| {
                     const nlists = try stab.asNlists(atom.local_sym_index, self);
                     defer self.base.allocator.free(nlists);

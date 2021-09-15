@@ -645,7 +645,6 @@ const RelocContext = struct {
     allocator: *Allocator,
     object: *Object,
     macho_file: *MachO,
-    parsed_atoms: *Object.ParsedAtoms,
 };
 
 fn initRelocFromObject(rel: macho.relocation_info, context: RelocContext) !Relocation {
@@ -877,12 +876,12 @@ pub fn parseRelocs(self: *Atom, relocs: []macho.relocation_info, context: RelocC
                 .sect = context.macho_file.got_section_index.?,
             };
 
-            if (context.parsed_atoms.getPtr(match)) |last| {
+            if (context.object.atoms.getPtr(match)) |last| {
                 last.*.next = atom;
                 atom.prev = last.*;
                 last.* = atom;
             } else {
-                try context.parsed_atoms.putNoClobber(match, atom);
+                try context.object.atoms.putNoClobber(context.allocator, match, atom);
             }
         } else if (parsed_rel.payload == .unsigned) {
             switch (parsed_rel.where) {
@@ -947,7 +946,7 @@ pub fn parseRelocs(self: *Atom, relocs: []macho.relocation_info, context: RelocC
             const stub_atom = try context.macho_file.createStubAtom(laptr_atom.local_sym_index);
             try context.macho_file.stubs_map.putNoClobber(context.allocator, parsed_rel.where_index, stub_atom);
             // TODO clean this up!
-            if (context.parsed_atoms.getPtr(.{
+            if (context.object.atoms.getPtr(.{
                 .seg = context.macho_file.text_segment_cmd_index.?,
                 .sect = context.macho_file.stub_helper_section_index.?,
             })) |last| {
@@ -955,12 +954,12 @@ pub fn parseRelocs(self: *Atom, relocs: []macho.relocation_info, context: RelocC
                 stub_helper_atom.prev = last.*;
                 last.* = stub_helper_atom;
             } else {
-                try context.parsed_atoms.putNoClobber(.{
+                try context.object.atoms.putNoClobber(context.allocator, .{
                     .seg = context.macho_file.text_segment_cmd_index.?,
                     .sect = context.macho_file.stub_helper_section_index.?,
                 }, stub_helper_atom);
             }
-            if (context.parsed_atoms.getPtr(.{
+            if (context.object.atoms.getPtr(.{
                 .seg = context.macho_file.text_segment_cmd_index.?,
                 .sect = context.macho_file.stubs_section_index.?,
             })) |last| {
@@ -968,12 +967,12 @@ pub fn parseRelocs(self: *Atom, relocs: []macho.relocation_info, context: RelocC
                 stub_atom.prev = last.*;
                 last.* = stub_atom;
             } else {
-                try context.parsed_atoms.putNoClobber(.{
+                try context.object.atoms.putNoClobber(context.allocator, .{
                     .seg = context.macho_file.text_segment_cmd_index.?,
                     .sect = context.macho_file.stubs_section_index.?,
                 }, stub_atom);
             }
-            if (context.parsed_atoms.getPtr(.{
+            if (context.object.atoms.getPtr(.{
                 .seg = context.macho_file.data_segment_cmd_index.?,
                 .sect = context.macho_file.la_symbol_ptr_section_index.?,
             })) |last| {
@@ -981,7 +980,7 @@ pub fn parseRelocs(self: *Atom, relocs: []macho.relocation_info, context: RelocC
                 laptr_atom.prev = last.*;
                 last.* = laptr_atom;
             } else {
-                try context.parsed_atoms.putNoClobber(.{
+                try context.object.atoms.putNoClobber(context.allocator, .{
                     .seg = context.macho_file.data_segment_cmd_index.?,
                     .sect = context.macho_file.la_symbol_ptr_section_index.?,
                 }, laptr_atom);
