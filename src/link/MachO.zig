@@ -231,7 +231,7 @@ const SymbolWithLoc = struct {
     },
     where_index: u32,
     local_sym_index: u32 = 0,
-    file: u16 = 0,
+    file: ?u16 = null, // null means Zig module
 };
 
 pub const GotIndirectionKey = struct {
@@ -557,13 +557,51 @@ pub fn flush(self: *MachO, comp: *Compilation) !void {
         }
 
         if (needs_full_relink) {
+            for (self.objects.items) |*object| {
+                object.free(self.base.allocator, self);
+                object.deinit(self.base.allocator);
+            }
             self.objects.clearRetainingCapacity();
+
+            for (self.archives.items) |*archive| {
+                archive.deinit(self.base.allocator);
+            }
             self.archives.clearRetainingCapacity();
+
+            for (self.dylibs.items) |*dylib| {
+                dylib.deinit(self.base.allocator);
+            }
             self.dylibs.clearRetainingCapacity();
             self.dylibs_map.clearRetainingCapacity();
             self.referenced_dylibs.clearRetainingCapacity();
 
-            // TODO figure out how to clear atoms from objects, etc.
+            {
+                var to_remove = std.ArrayList(u32).init(self.base.allocator);
+                defer to_remove.deinit();
+                var it = self.symbol_resolver.iterator();
+                while (it.next()) |entry| {
+                    const key = entry.key_ptr.*;
+                    const value = entry.value_ptr.*;
+                    if (value.file != null) {
+                        try to_remove.append(key);
+                    }
+                }
+
+                for (to_remove.items) |key| {
+                    if (self.symbol_resolver.fetchRemove(key)) |entry| {
+                        const resolv = entry.value;
+                        switch (resolv.where) {
+                            .global => {
+                                self.globals_free_list.append(self.base.allocator, resolv.where_index) catch {};
+                                self.globals.items[resolv.where_index].n_type = 0;
+                            },
+                            .undef => {
+                                self.undefs.items[resolv.where_index].n_desc = 0;
+                            },
+                        }
+                    }
+                }
+            }
 
             // Positional arguments to the linker such as object files and static archives.
             var positionals = std.ArrayList([]const u8).init(arena);
@@ -808,7 +846,9 @@ pub fn flush(self: *MachO, comp: *Compilation) !void {
             const resolv = self.symbol_resolver.get(sym.n_strx) orelse unreachable;
 
             log.err("undefined reference to symbol '{s}'", .{sym_name});
-            log.err("  first referenced in '{s}'", .{self.objects.items[resolv.file].name});
+            if (resolv.file) |file| {
+                log.err("  first referenced in '{s}'", .{self.objects.items[file].name});
+            }
         }
         if (self.unresolved.count() > 0) {
             return error.UndefinedSymbolReference;
@@ -2349,7 +2389,9 @@ fn resolveSymbolsInObject(self: *MachO, object_id: u16) !void {
                         !(symbolIsWeakDef(global.*) or symbolIsPext(global.*)))
                     {
                         log.err("symbol '{s}' defined multiple times", .{sym_name});
-                        log.err("  first definition in '{s}'", .{self.objects.items[resolv.file].name});
+                        if (resolv.file) |file| {
+                            log.err("  first definition in '{s}'", .{self.objects.items[file].name});
+                        }
                         log.err("  next definition in '{s}'", .{object.name});
                         return error.MultipleSymbolDefinitions;
                     } else if (symbolIsWeakDef(sym) or symbolIsPext(sym)) continue; // Current symbol is weak, so skip it.

@@ -55,6 +55,7 @@ tu_comp_dir: ?[]const u8 = null,
 mtime: ?u64 = null,
 
 managed_atoms: std.ArrayListUnmanaged(*Atom) = .{},
+first_atoms: std.AutoHashMapUnmanaged(MachO.MatchingSection, *Atom) = .{},
 atoms: std.AutoHashMapUnmanaged(MachO.MatchingSection, *Atom) = .{},
 sections_as_symbols: std.AutoHashMapUnmanaged(u16, u32) = .{},
 
@@ -143,6 +144,7 @@ pub fn deinit(self: *Object, allocator: *Allocator) void {
     allocator.free(self.name);
 
     self.managed_atoms.deinit(allocator);
+    self.first_atoms.deinit(allocator);
     self.atoms.deinit(allocator);
 
     if (self.debug_info) |*db| {
@@ -155,6 +157,79 @@ pub fn deinit(self: *Object, allocator: *Allocator) void {
 
     if (self.tu_comp_dir) |n| {
         allocator.free(n);
+    }
+}
+
+pub fn free(self: *Object, allocator: *Allocator, macho_file: *MachO) void {
+    log.debug("freeObject {*}", .{self});
+
+    var it = self.atoms.iterator();
+    while (it.next()) |entry| {
+        const match = entry.key_ptr.*;
+        const first_atom = self.first_atoms.get(match).?;
+        const last_atom = entry.value_ptr.*;
+        var atom = first_atom;
+
+        while (true) {
+            if (atom.local_sym_index != 0) {
+                macho_file.locals_free_list.append(allocator, atom.local_sym_index) catch {};
+                const local = &macho_file.locals.items[atom.local_sym_index];
+                local.n_type = 0;
+                atom.local_sym_index = 0;
+            }
+            if (atom == last_atom) {
+                break;
+            }
+            if (atom.next) |next| {
+                atom = next;
+            } else break;
+        }
+    }
+
+    self.freeAtoms(allocator, macho_file);
+}
+
+fn freeAtoms(self: *Object, allocator: *Allocator, macho_file: *MachO) void {
+    var it = self.atoms.iterator();
+    while (it.next()) |entry| {
+        const match = entry.key_ptr.*;
+        var first_atom: *Atom = self.first_atoms.get(match).?;
+        var last_atom: *Atom = entry.value_ptr.*;
+        var atom = first_atom;
+
+        while (true) {
+            atom.deinit(allocator);
+
+            if (atom == last_atom) {
+                break;
+            }
+            if (atom.next) |next| {
+                atom = next;
+            } else break;
+        }
+
+        if (macho_file.atoms.getPtr(match)) |atom_ptr| {
+            if (atom_ptr.* == last_atom) {
+                if (first_atom.prev) |prev| {
+                    // TODO shrink the section size here
+                    atom_ptr.* = prev;
+                } else {
+                    _ = macho_file.atoms.fetchRemove(match);
+                }
+            }
+        }
+
+        if (first_atom.prev) |prev| {
+            prev.next = last_atom.next;
+        } else {
+            first_atom.prev = null;
+        }
+
+        if (last_atom.next) |next| {
+            next.prev = last_atom.prev;
+        } else {
+            last_atom.next = null;
+        }
     }
 }
 
@@ -624,6 +699,10 @@ pub fn parseIntoAtoms(self: *Object, allocator: *Allocator, macho_file: *MachO) 
                 .offset = nlist.n_value - sect.addr,
                 .stab = stab,
             });
+        }
+
+        if (!self.first_atoms.contains(match)) {
+            try self.first_atoms.putNoClobber(allocator, match, atom);
         }
 
         if (self.atoms.getPtr(match)) |last| {
