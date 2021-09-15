@@ -31,13 +31,11 @@ header: ?macho.mach_header_64 = null,
 load_commands: std.ArrayListUnmanaged(LoadCommand) = .{},
 
 segment_cmd_index: ?u16 = null,
+text_section_index: ?u16 = null,
 symtab_cmd_index: ?u16 = null,
 dysymtab_cmd_index: ?u16 = null,
 build_version_cmd_index: ?u16 = null,
 data_in_code_cmd_index: ?u16 = null,
-
-text_section_index: ?u16 = null,
-mod_init_func_section_index: ?u16 = null,
 
 // __DWARF segment sections
 dwarf_debug_info_index: ?u16 = null,
@@ -228,10 +226,6 @@ pub fn readLoadCommands(self: *Object, allocator: *Allocator, reader: anytype) !
                     } else if (mem.eql(u8, segname, "__TEXT")) {
                         if (mem.eql(u8, sectname, "__text")) {
                             self.text_section_index = index;
-                        }
-                    } else if (mem.eql(u8, segname, "__DATA")) {
-                        if (mem.eql(u8, sectname, "__mod_init_func")) {
-                            self.mod_init_func_section_index = index;
                         }
                     }
 
